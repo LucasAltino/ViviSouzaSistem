@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Product, Client, Sale, Category, SaleItem } from '../lib/types';
 import { 
   TrendingUp, DollarSign, Users, ShoppingBag, Plus, Trash2, 
   CheckCircle, AlertCircle, MessageCircle, PlusCircle, 
-  Calendar, Edit, Check, X, Info
+  Calendar, Edit, Check, X, Info, Upload, ImageOff
 } from 'lucide-react';
 
 interface SellerDashboardProps {
@@ -320,6 +320,70 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
   const [prodPrice, setProdPrice] = useState('');
   const [prodImage, setProdImage] = useState('');
   const [prodIsActive, setProdIsActive] = useState(true);
+  const [isProcessingImage, setIsProcessingImage] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Reads a device photo, downsizes it (max 800px) and re-encodes as JPEG
+  // so it stays small enough to live safely inside localStorage.
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      showToast('Selecione um arquivo de imagem válido!', 'error');
+      e.target.value = '';
+      return;
+    }
+
+    setIsProcessingImage(true);
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        const MAX_DIMENSION = 800;
+        let { width, height } = img;
+
+        if (width > height && width > MAX_DIMENSION) {
+          height = Math.round((height * MAX_DIMENSION) / width);
+          width = MAX_DIMENSION;
+        } else if (height > MAX_DIMENSION) {
+          width = Math.round((width * MAX_DIMENSION) / height);
+          height = MAX_DIMENSION;
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+
+        if (!ctx) {
+          showToast('Não foi possível processar a imagem.', 'error');
+          setIsProcessingImage(false);
+          return;
+        }
+
+        ctx.drawImage(img, 0, 0, width, height);
+        const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.8);
+
+        setProdImage(compressedDataUrl);
+        setIsProcessingImage(false);
+      };
+      img.onerror = () => {
+        showToast('Não foi possível ler essa imagem.', 'error');
+        setIsProcessingImage(false);
+      };
+      img.src = event.target?.result as string;
+    };
+    reader.onerror = () => {
+      showToast('Erro ao carregar o arquivo.', 'error');
+      setIsProcessingImage(false);
+    };
+    reader.readAsDataURL(file);
+
+    // Allow selecting the same file again later and trigger onChange
+    e.target.value = '';
+  };
 
   // Sort products alphabetically
   const sortedProductsList = [...products].sort((a, b) => a.name.localeCompare(b.name));
@@ -1160,14 +1224,56 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-neutral-500 mb-1">Link da Imagem</label>
-                    <input
-                      type="text"
-                      placeholder="Ex: https://link-da-imagem.com/bolo.jpg"
-                      value={prodImage}
-                      onChange={(e) => setProdImage(e.target.value)}
-                      className="block w-full px-3 py-2 border border-neutral-200 rounded-xl text-sm focus:outline-none focus:ring-1 focus:ring-[#0B2545]"
-                    />
+                    <label className="block text-xs font-bold text-neutral-500 mb-1.5">Foto do Produto</label>
+                    <div className="flex items-center gap-3">
+                      {/* Live preview */}
+                      <div className="h-16 w-16 rounded-xl overflow-hidden bg-neutral-100 border border-neutral-200 flex-shrink-0 flex items-center justify-center">
+                        {prodImage ? (
+                          <img
+                            src={prodImage}
+                            alt="Pré-visualização"
+                            className="h-full w-full object-cover"
+                            onError={(e) => {
+                              (e.target as HTMLImageElement).style.display = 'none';
+                            }}
+                          />
+                        ) : (
+                          <ImageOff className="h-5 w-5 text-neutral-300" />
+                        )}
+                      </div>
+
+                      <div className="flex-1 space-y-2">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          ref={fileInputRef}
+                          onChange={handleImageUpload}
+                          className="hidden"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          disabled={isProcessingImage}
+                          className="w-full bg-neutral-100 hover:bg-neutral-200 text-neutral-700 text-xs font-bold py-2 rounded-xl flex items-center justify-center gap-1.5 border border-neutral-200 disabled:opacity-50"
+                        >
+                          <Upload className="h-3.5 w-3.5" />
+                          {isProcessingImage ? 'Processando...' : 'Escolher foto do dispositivo'}
+                        </button>
+                        <input
+                          type="text"
+                          placeholder="ou cole o link de uma imagem"
+                          value={prodImage.startsWith('data:') ? '' : prodImage}
+                          onChange={(e) => setProdImage(e.target.value)}
+                          className="block w-full px-3 py-1.5 border border-neutral-200 rounded-lg text-[11px] focus:outline-none focus:ring-1 focus:ring-[#0B2545]"
+                        />
+                        {prodImage.startsWith('data:') && (
+                          <p className="text-[10px] text-green-600 font-bold flex items-center gap-1">
+                            <CheckCircle className="h-3 w-3" />
+                            Foto carregada do dispositivo
+                          </p>
+                        )}
+                      </div>
+                    </div>
                   </div>
 
                   <div>
