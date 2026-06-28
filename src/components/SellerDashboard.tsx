@@ -3,7 +3,8 @@ import { Product, Client, Sale, Category, SaleItem } from '../lib/types';
 import { 
   TrendingUp, DollarSign, Users, ShoppingBag, Plus, Trash2, 
   CheckCircle, AlertCircle, MessageCircle, PlusCircle, 
-  Calendar, Edit, Check, X, Info, Upload, ImageOff
+  Calendar, Edit, Check, X, Info, Upload, ImageOff,
+  Search, FileText, Download, Printer
 } from 'lucide-react';
 
 interface SellerDashboardProps {
@@ -18,9 +19,10 @@ interface SellerDashboardProps {
   onSettleAllDebts: (clientId: string) => void;
   adminPin: string;
   onUpdatePin: (pin: string) => void;
+  isFirebase?: boolean;
 }
 
-type Tab = 'visao_geral' | 'registrar_venda' | 'fiados' | 'produtos';
+type Tab = 'visao_geral' | 'registrar_venda' | 'fiados' | 'produtos' | 'relatorios' | 'historico_clientes';
 type Period = '7_dias' | '1_mes' | '3_meses' | '6_meses' | '1_ano' | 'tudo';
 
 export const SellerDashboard: React.FC<SellerDashboardProps> = ({
@@ -34,7 +36,8 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
   onSettleSale,
   onSettleAllDebts,
   adminPin,
-  onUpdatePin
+  onUpdatePin,
+  isFirebase = false
 }) => {
   const [activeTab, setActiveTab] = useState<Tab>('visao_geral');
   const [tempPin, setTempPin] = useState(adminPin);
@@ -84,6 +87,185 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
       .filter(s => s.clientId === clientId && s.status === 'fiado')
       .reduce((sum, s) => sum + s.totalAmount, 0);
   };
+
+  // ----------------------------------------------------
+  // TAB 5: RELATÓRIOS (MONTHLY REPORT & EXPORTS) STATE & LOGIC
+  // ----------------------------------------------------
+  const [reportMonth, setReportMonth] = useState(() => {
+    const today = new Date();
+    return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+  });
+
+  const reportSales = sales.filter(s => {
+    const sDate = new Date(s.date);
+    const sMonthStr = `${sDate.getFullYear()}-${String(sDate.getMonth() + 1).padStart(2, '0')}`;
+    return sMonthStr === reportMonth;
+  });
+
+  const reportTotalRevenue = reportSales.reduce((sum, s) => sum + s.totalAmount, 0);
+  const reportTotalReceived = reportSales.filter(s => s.status === 'pago').reduce((sum, s) => sum + s.totalAmount, 0);
+  const reportTotalOutstanding = reportSales.filter(s => s.status === 'fiado').reduce((sum, s) => sum + s.totalAmount, 0);
+
+  const getAvailableMonths = () => {
+    const monthsSet = new Set<string>();
+    sales.forEach(s => {
+      const d = new Date(s.date);
+      monthsSet.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    });
+    const d = new Date();
+    monthsSet.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    return Array.from(monthsSet).sort().reverse();
+  };
+
+  const availableReportMonths = getAvailableMonths();
+
+  const getMonthLabel = (monthStr: string) => {
+    const [year, month] = monthStr.split('-');
+    const date = new Date(Number(year), Number(month) - 1, 1);
+    return date.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+  };
+
+  const exportToCSV = () => {
+    if (reportSales.length === 0) {
+      showToast('Nenhuma venda no período para exportar!', 'error');
+      return;
+    }
+
+    let csvContent = "\uFEFF";
+    csvContent += "ID da Venda;Data;Cliente;Produtos;Valor Total (R$);Status de Pagamento;Data de Recebimento\r\n";
+
+    reportSales.forEach(s => {
+      const dateStr = new Date(s.date).toLocaleDateString('pt-BR') + ' ' + new Date(s.date).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      const productsStr = s.items.map(item => `${item.quantity}x ${item.productName} (R$ ${item.priceAtSale.toFixed(2)})`).join(' | ');
+      const paidDateStr = s.paidAt ? new Date(s.paidAt).toLocaleDateString('pt-BR') : '';
+      csvContent += `${s.id};${dateStr};${s.clientName};"${productsStr}";${s.totalAmount.toFixed(2)};${s.status.toUpperCase()};${paidDateStr}\r\n`;
+    });
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `Relatorio_Vendas_${reportMonth}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showToast('Planilha Excel (CSV) baixada com sucesso!', 'success');
+  };
+
+  const printReport = () => {
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      showToast('Popups bloqueados! Permita popups para imprimir.', 'error');
+      return;
+    }
+
+    const monthLabel = getMonthLabel(reportMonth);
+    let itemsHtml = '';
+    reportSales.forEach((s, idx) => {
+      const dateStr = new Date(s.date).toLocaleDateString('pt-BR');
+      const itemsList = s.items.map(item => `${item.quantity}x ${item.productName}`).join(', ');
+      itemsHtml += `
+        <tr style="border-bottom: 1px solid #ddd; font-family: sans-serif;">
+          <td style="padding: 10px;">${idx + 1}</td>
+          <td style="padding: 10px;">${dateStr}</td>
+          <td style="padding: 10px;">${s.clientName}</td>
+          <td style="padding: 10px;">${itemsList}</td>
+          <td style="padding: 10px; text-align: right; font-weight: bold;">R$ ${s.totalAmount.toFixed(2)}</td>
+          <td style="padding: 10px; text-align: center;"><span style="padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: bold; background: ${s.status === 'pago' ? '#e6f4ea; color: #137333;' : '#fef7e0; color: #b06000;'}">${s.status.toUpperCase()}</span></td>
+        </tr>
+      `;
+    });
+
+    const htmlContent = `
+      <html>
+        <head>
+          <title>Relatório de Vendas - ${monthLabel}</title>
+          <style>
+            body { font-family: sans-serif; color: #333; margin: 30px; }
+            .header { text-align: center; border-bottom: 2px solid #0B2545; padding-bottom: 20px; margin-bottom: 30px; }
+            .title { color: #0B2545; margin: 0; font-size: 24px; font-weight: bold; }
+            .subtitle { color: #666; margin: 5px 0 0 0; font-size: 14px; }
+            .metrics { display: flex; justify-content: space-between; margin-bottom: 30px; }
+            .metric-card { flex: 1; border: 1px solid #ddd; padding: 15px; border-radius: 8px; text-align: center; margin: 0 10px; }
+            .metric-card:first-child { margin-left: 0; }
+            .metric-card:last-child { margin-right: 0; }
+            .metric-label { font-size: 11px; font-weight: bold; color: #888; text-transform: uppercase; }
+            .metric-value { font-size: 20px; font-weight: bold; color: #0B2545; margin-top: 5px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 13px; }
+            th { background-color: #f5f5f5; padding: 10px; text-align: left; border-bottom: 2px solid #ddd; }
+            footer { text-align: center; font-size: 10px; color: #888; margin-top: 50px; border-top: 1px solid #ddd; padding-top: 15px; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h1 class="title">Vivisouza Confeitaria</h1>
+            <p class="subtitle">Relatório Mensal de Vendas — ${monthLabel}</p>
+          </div>
+          <div class="metrics">
+            <div class="metric-card">
+              <div class="metric-label">Faturamento Total</div>
+              <div class="metric-value">R$ ${reportTotalRevenue.toFixed(2)}</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-label">Valor Recebido</div>
+              <div class="metric-value" style="color: #137333;">R$ ${reportTotalReceived.toFixed(2)}</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-label">Valor em Aberto (Fiados)</div>
+              <div class="metric-value" style="color: #b06000;">R$ ${reportTotalOutstanding.toFixed(2)}</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-label">Total de Vendas</div>
+              <div class="metric-value">${reportSales.length}</div>
+            </div>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 50px;">#</th>
+                <th style="width: 100px;">Data</th>
+                <th>Cliente</th>
+                <th>Produtos</th>
+                <th style="width: 120px; text-align: right;">Total</th>
+                <th style="width: 100px; text-align: center;">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${itemsHtml}
+            </tbody>
+          </table>
+          <footer>
+            Relatório gerado em ${new Date().toLocaleDateString('pt-BR')} às ${new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })} • Vivisouza Confeitaria
+          </footer>
+          <script>
+            window.onload = function() {
+              window.print();
+              setTimeout(function() { window.close(); }, 500);
+            }
+          </script>
+        </body>
+      </html>
+    `;
+
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
+  };
+
+  // ----------------------------------------------------
+  // TAB 6: BUSCA DE CLIENTE & HISTÓRICO DE COMPRAS STATE & LOGIC
+  // ----------------------------------------------------
+  const [customerHistorySearch, setCustomerHistorySearch] = useState('');
+  const [selectedHistoryClientId, setSelectedHistoryClientId] = useState<string | null>(null);
+
+  const filteredHistoryClients = clients.filter(c => 
+    c.name.toLowerCase().includes(customerHistorySearch.toLowerCase()) ||
+    (c.phone && c.phone.includes(customerHistorySearch))
+  );
+
+  const selectedHistoryClient = clients.find(c => c.id === selectedHistoryClientId);
+  const selectedClientSales = selectedHistoryClientId
+    ? sales.filter(s => s.clientId === selectedHistoryClientId)
+    : [];
 
   // ----------------------------------------------------
   // TAB 1: VISÃO GERAL (STATS & REPORTS) STATE & LOGIC
@@ -456,17 +638,24 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
       
       {/* Dashboard Subheader & Tab Switcher */}
       <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 mb-8 border-b border-neutral-200 pb-4">
-        <div>
+        <div className="flex items-center gap-3">
           <h1 className="text-2xl font-extrabold text-[#0B2545]">Painel do Vendedor</h1>
-          <p className="text-sm text-neutral-500">Gerencie suas vendas, fiados e cardápio de produtos.</p>
+          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+            isFirebase
+              ? 'bg-green-50 text-green-700 border-green-200'
+              : 'bg-yellow-50 text-yellow-700 border-yellow-200'
+          }`}>
+            {isFirebase ? 'Sincronizado' : 'Modo Offline'}
+          </span>
         </div>
+        <p className="text-sm text-neutral-500">Gerencie suas vendas, fiados e cardápio de produtos.</p>
 
         {/* Navigation Tabs */}
-        <div className="flex overflow-x-auto w-full lg:w-auto bg-white p-1 rounded-xl border border-neutral-200 shadow-sm">
+        <div className="flex overflow-x-auto w-full lg:w-auto bg-white p-1 rounded-xl border border-neutral-200 shadow-sm scrollbar-none no-scrollbar">
           <button
             onClick={() => setActiveTab('visao_geral')}
             className={`px-4 py-2.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${
-              activeTab === 'visao_geral' ? 'bg-[#0B2545] text-white' : 'text-neutral-600 hover:text-[#0B2545]'
+              activeTab === 'visao_geral' ? 'bg-[#0B2545] text-white animate-pulse-subtle' : 'text-neutral-600 hover:text-[#0B2545]'
             }`}
           >
             Visão Geral
@@ -489,6 +678,22 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
             {activeDebtors.length > 0 && (
               <span className={`h-2 w-2 rounded-full ${activeTab === 'fiados' ? 'bg-[#F4D35E]' : 'bg-[#0B2545]'}`}></span>
             )}
+          </button>
+          <button
+            onClick={() => setActiveTab('historico_clientes')}
+            className={`px-4 py-2.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${
+              activeTab === 'historico_clientes' ? 'bg-[#0B2545] text-white' : 'text-neutral-600 hover:text-[#0B2545]'
+            }`}
+          >
+            Clientes & Histórico
+          </button>
+          <button
+            onClick={() => setActiveTab('relatorios')}
+            className={`px-4 py-2.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${
+              activeTab === 'relatorios' ? 'bg-[#0B2545] text-white' : 'text-neutral-600 hover:text-[#0B2545]'
+            }`}
+          >
+            Relatórios
           </button>
           <button
             onClick={() => setActiveTab('produtos')}
@@ -1462,6 +1667,299 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
           </div>
         </div>
       )}
+
+      {/* ----------------------------------------------------
+          TAB 5: RELATÓRIOS MENSAL
+          ---------------------------------------------------- */}
+      {activeTab === 'relatorios' && (
+        <div className="space-y-6 animate-fade-in pb-16">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-6 rounded-3xl border border-neutral-100 shadow-sm">
+            <div>
+              <h2 className="text-lg font-bold text-neutral-800 flex items-center gap-2">
+                <FileText className="h-5 w-5 text-[#0B2545]" />
+                Relatórios Mensais de Vendas
+              </h2>
+              <p className="text-xs text-neutral-500 mt-1">Gere demonstrativos, baixe planilhas excel ou imprima relatórios formatados em PDF.</p>
+            </div>
+            
+            <div className="flex flex-wrap gap-2 items-center">
+              <label className="text-xs font-bold text-neutral-500">Mês de Referência:</label>
+              <select
+                value={reportMonth}
+                onChange={(e) => setReportMonth(e.target.value)}
+                className="bg-neutral-50 border border-neutral-200 text-neutral-800 text-xs font-bold rounded-xl px-3 py-2 focus:outline-none focus:ring-1 focus:ring-[#0B2545]"
+              >
+                {availableReportMonths.map(m => (
+                  <option key={m} value={m}>{getMonthLabel(m)}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Report summary metric cards */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="bg-white p-5 rounded-2xl border border-neutral-100 shadow-sm text-center">
+              <p className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider">Faturamento do Mês</p>
+              <h3 className="text-lg sm:text-2xl font-extrabold text-[#0B2545] mt-2">R$ {reportTotalRevenue.toFixed(2)}</h3>
+            </div>
+            <div className="bg-white p-5 rounded-2xl border border-neutral-100 shadow-sm text-center">
+              <p className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider">Total Recebido</p>
+              <h3 className="text-lg sm:text-2xl font-extrabold text-green-600 mt-2">R$ {reportTotalReceived.toFixed(2)}</h3>
+            </div>
+            <div className="bg-white p-5 rounded-2xl border border-neutral-100 shadow-sm text-center">
+              <p className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider">Pendente em Fiados</p>
+              <h3 className="text-lg sm:text-2xl font-extrabold text-yellow-600 mt-2">R$ {reportTotalOutstanding.toFixed(2)}</h3>
+            </div>
+            <div className="bg-white p-5 rounded-2xl border border-neutral-100 shadow-sm text-center">
+              <p className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider">Quantidade de Vendas</p>
+              <h3 className="text-lg sm:text-2xl font-extrabold text-neutral-700 mt-2">{reportSales.length}</h3>
+            </div>
+          </div>
+
+          {/* Action Buttons to print/export */}
+          <div className="flex gap-3 justify-end">
+            <button
+              onClick={exportToCSV}
+              className="bg-white border border-neutral-200 hover:border-[#0B2545] text-neutral-700 hover:text-[#0B2545] font-extrabold text-xs px-4 py-2.5 rounded-xl transition-all shadow-sm flex items-center gap-1.5 active:scale-95"
+            >
+              <Download className="h-4 w-4" />
+              Exportar Excel (CSV)
+            </button>
+            <button
+              onClick={printReport}
+              className="bg-[#0B2545] hover:bg-[#16355c] text-white font-extrabold text-xs px-4 py-2.5 rounded-xl transition-all shadow-sm flex items-center gap-1.5 active:scale-95"
+            >
+              <Printer className="h-4 w-4" />
+              Imprimir / Salvar PDF
+            </button>
+          </div>
+
+          {/* Report sales list */}
+          <div className="bg-white rounded-3xl border border-neutral-100 shadow-sm overflow-hidden">
+            <div className="px-6 py-4 border-b border-neutral-100 bg-neutral-50/50">
+              <h3 className="text-sm font-bold text-neutral-800">Detalhamento das Vendas do Mês</h3>
+            </div>
+
+            {reportSales.length === 0 ? (
+              <p className="text-sm text-neutral-400 text-center py-16">Nenhuma venda registrada no mês selecionado.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs sm:text-sm">
+                  <thead>
+                    <tr className="bg-neutral-50 text-neutral-400 font-bold uppercase border-b border-neutral-100 text-[10px] sm:text-xs">
+                      <th className="px-6 py-3">Data</th>
+                      <th className="px-6 py-3">Cliente</th>
+                      <th className="px-6 py-3">Itens</th>
+                      <th className="px-6 py-3 text-right">Valor Total</th>
+                      <th className="px-6 py-3 text-center">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-100">
+                    {reportSales.map(s => (
+                      <tr key={s.id} className="hover:bg-neutral-50/50">
+                        <td className="px-6 py-4 whitespace-nowrap text-neutral-500 font-medium">
+                          {new Date(s.date).toLocaleDateString('pt-BR')}
+                        </td>
+                        <td className="px-6 py-4 font-bold text-neutral-800">
+                          {s.clientName}
+                        </td>
+                        <td className="px-6 py-4 text-neutral-600 max-w-xs sm:max-w-md truncate">
+                          {s.items.map(item => `${item.quantity}x ${item.productName}`).join(', ')}
+                        </td>
+                        <td className="px-6 py-4 text-right font-extrabold text-[#0B2545]">
+                          R$ {s.totalAmount.toFixed(2)}
+                        </td>
+                        <td className="px-6 py-4 text-center">
+                          <span className={`inline-flex px-2.5 py-1 rounded-full text-[10px] font-bold ${
+                            s.status === 'pago' 
+                              ? 'bg-green-50 text-green-700 border border-green-150' 
+                              : 'bg-yellow-50 text-yellow-700 border border-yellow-150'
+                          }`}>
+                            {s.status.toUpperCase()}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ----------------------------------------------------
+          TAB 6: HISTÓRICO DE CLIENTES
+          ---------------------------------------------------- */}
+      {activeTab === 'historico_clientes' && (
+        <div className="space-y-6 animate-fade-in pb-16">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            
+            {/* Left column: Search and list customers */}
+            <div className="bg-white p-6 rounded-3xl border border-neutral-100 shadow-sm space-y-4 h-fit">
+              <div>
+                <h3 className="text-md font-bold text-neutral-800">Localizar Cliente</h3>
+                <p className="text-xs text-neutral-400 mt-0.5">Selecione para ver a ficha completa e histórico de compras.</p>
+              </div>
+
+              <div className="relative">
+                <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <Search className="h-4 w-4 text-neutral-400" />
+                </span>
+                <input
+                  type="text"
+                  placeholder="Pesquisar por nome ou celular..."
+                  value={customerHistorySearch}
+                  onChange={(e) => setCustomerHistorySearch(e.target.value)}
+                  className="block w-full pl-9 pr-3 py-2 border border-neutral-200 rounded-xl text-xs focus:outline-none focus:ring-1 focus:ring-[#0B2545] bg-neutral-50 placeholder-neutral-400"
+                />
+              </div>
+
+              {filteredHistoryClients.length === 0 ? (
+                <p className="text-xs text-neutral-400 text-center py-8">Nenhum cliente cadastrado com este nome.</p>
+              ) : (
+                <div className="divide-y divide-neutral-100 max-h-96 overflow-y-auto scrollbar-thin">
+                  {filteredHistoryClients.map(c => {
+                    const outstanding = getClientBalance(c.id);
+                    return (
+                      <button
+                        key={c.id}
+                        onClick={() => setSelectedHistoryClientId(c.id)}
+                        className={`w-full text-left p-3 rounded-2xl transition-all flex items-center justify-between group ${
+                          selectedHistoryClientId === c.id 
+                            ? 'bg-neutral-50 border border-neutral-200' 
+                            : 'hover:bg-neutral-50/50'
+                        }`}
+                      >
+                        <div>
+                          <p className="text-xs font-bold text-neutral-800 group-hover:text-[#0B2545]">{c.name}</p>
+                          <p className="text-[10px] text-neutral-400 mt-0.5">{c.phone ? `(${c.phone.substring(2,4)}) ${c.phone.substring(4,9)}-${c.phone.substring(9)}` : 'Sem celular'}</p>
+                        </div>
+                        {outstanding > 0 ? (
+                          <span className="text-[10px] font-extrabold text-red-600 bg-red-50 border border-red-100 px-2 py-0.5 rounded-full">
+                            R$ {outstanding.toFixed(2)}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-bold text-green-600 bg-green-50 px-2 py-0.5 rounded-full">
+                            Em dia
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Right column: Purchases ledger */}
+            <div className="lg:col-span-2 space-y-6">
+              {!selectedHistoryClientId ? (
+                <div className="bg-white p-12 rounded-3xl border border-neutral-100 shadow-sm text-center flex flex-col items-center justify-center">
+                  <Users className="h-12 w-12 text-neutral-200 mb-4" />
+                  <h3 className="text-sm font-bold text-neutral-500">Selecione um cliente na lista</h3>
+                  <p className="text-xs text-neutral-400 mt-1">Clique em qualquer cliente no painel esquerdo para visualizar todos os pedidos realizados.</p>
+                </div>
+              ) : (
+                <>
+                  {/* Customer ledger header with totals */}
+                  <div className="bg-white p-6 rounded-3xl border border-neutral-100 shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                    <div>
+                      <h2 className="text-lg font-bold text-neutral-800">{selectedHistoryClient?.name}</h2>
+                      <p className="text-xs text-neutral-400 mt-1 flex items-center gap-1">
+                        Cadastrado em {selectedHistoryClient?.createdAt ? new Date(selectedHistoryClient.createdAt).toLocaleDateString('pt-BR') : 'data desconhecida'}
+                      </p>
+                    </div>
+
+                    <div className="flex gap-4">
+                      <div className="text-right">
+                        <p className="text-[10px] font-bold text-neutral-400 uppercase">Compras Totais</p>
+                        <p className="text-lg font-extrabold text-[#0B2545]">{selectedClientSales.length}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-[10px] font-bold text-neutral-400 uppercase">Dívida Atual</p>
+                        <p className={`text-lg font-extrabold ${getClientBalance(selectedHistoryClientId) > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                          R$ {getClientBalance(selectedHistoryClientId).toFixed(2)}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Purchases Ledger list */}
+                  <div className="bg-white p-6 rounded-3xl border border-neutral-100 shadow-sm space-y-4">
+                    <h3 className="text-sm font-bold text-neutral-800">Histórico de Compras</h3>
+                    
+                    {selectedClientSales.length === 0 ? (
+                      <p className="text-xs text-neutral-400 text-center py-12">Nenhuma compra registrada para este cliente.</p>
+                    ) : (
+                      <div className="space-y-4 max-h-[500px] overflow-y-auto pr-1">
+                        {selectedClientSales.map(sale => (
+                          <div 
+                            key={sale.id}
+                            className="p-4 border border-neutral-100 rounded-2xl space-y-3 hover:border-neutral-200 transition-all bg-neutral-50/20"
+                          >
+                            <div className="flex justify-between items-center">
+                              <span className="text-xs text-neutral-400 font-bold">
+                                {new Date(sale.date).toLocaleDateString('pt-BR')} às {new Date(sale.date).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                              
+                              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                                sale.status === 'pago' 
+                                  ? 'bg-green-50 text-green-700 border border-green-100' 
+                                  : 'bg-yellow-50 text-yellow-700 border border-yellow-100'
+                              }`}>
+                                {sale.status}
+                              </span>
+                            </div>
+
+                            {/* Sale Items */}
+                            <div className="space-y-2.5">
+                              {sale.items.map(item => (
+                                <div key={item.productId} className="flex justify-between items-center text-xs">
+                                  <span className="text-neutral-600">{item.quantity}x {item.productName}</span>
+                                  <span className="text-neutral-400 font-medium font-bold">R$ {(item.priceAtSale * item.quantity).toFixed(2)}</span>
+                                </div>
+                              ))}
+                            </div>
+
+                            {/* Total and Actions */}
+                            <div className="pt-3 border-t border-neutral-100 flex justify-between items-center">
+                              <div>
+                                <p className="text-[9px] text-neutral-400 uppercase font-bold">Total do Pedido</p>
+                                <p className="text-sm font-extrabold text-[#0B2545]">R$ {sale.totalAmount.toFixed(2)}</p>
+                              </div>
+
+                              {sale.status === 'fiado' && (
+                                <button
+                                  onClick={() => {
+                                    triggerConfirm(
+                                      'Dar baixa na dívida',
+                                      `Tem certeza que deseja liquidar esta conta de R$ ${sale.totalAmount.toFixed(2)} do cliente ${selectedHistoryClient?.name}?`,
+                                      () => {
+                                        onSettleSale(sale.id);
+                                        showToast('Dívida liquidada com sucesso!', 'success');
+                                      }
+                                    );
+                                  }}
+                                  className="bg-green-600 hover:bg-green-700 text-white font-bold text-[10px] px-3.5 py-1.5 rounded-xl transition-all"
+                                >
+                                  Dar Baixa Completa
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+            
+          </div>
+        </div>
+      )}
+      
+      {/* ----------------------------------------------------
 
       {/* ----------------------------------------------------
           CUSTOM NOTIFICATIONS: TOAST NOTIFICATION OVERLAY
